@@ -1,43 +1,43 @@
 # 3D BVH
 
-This module provides a standalone C++17 3D BVH that is geometry-agnostic through template adapters.
-The public declarations live in `bvh3d.h`, and the template definitions live in `bvh3d_impl.h`.
-Consumers should include `bvh3d.h` only.
+该模块提供一个独立的 C++17 三维 BVH，通过模板适配器实现几何无关能力。
+对外声明位于 `bvh3d.h`，模板定义位于 `bvh3d_impl.h`。
+调用方应只包含 `bvh3d.h`。
 
-Core ideas:
+核心思路：
 
-- `Bvh3<Primitive, Adapter>` builds over any `Primitive` type that can be converted to triangles.
-- `PrimitiveAdapter` is the extension point for geometry-independent use.
-- `Triangle3<T>` is the normalized build primitive inside the tree.
-- `Quad3<T>` is triangulated by choosing the diagonal that maximizes the minimum triangle angle.
-- The current builder uses centroid median splitting to keep the first version deterministic and compact.
+- `Bvh3<Primitive, Adapter>` 可以构建在任何“可转换为三角形”的 `Primitive` 类型之上。
+- `PrimitiveAdapter` 是实现几何无关扩展的入口。
+- `Triangle3<T>` 是树内部统一使用的构建 primitive。
+- `Quad3<T>` 会通过选择“最小三角角度最大”的对角线进行三角化。
+- 当前构建器采用基于质心的中位数划分，以保持第一版实现简单、确定且紧凑。
 
-Current query support:
+当前查询能力：
 
-- AABB overlap traversal over triangulated records
-- Unique primitive hit collection
+- 基于三角化记录的 AABB 重叠遍历
+- 唯一 primitive 命中收集
 
-Out of scope for this iteration:
+本轮暂不包含：
 
-- Ray traversal
-- Exact triangle intersection tests
-- Nearest-neighbor or distance queries
-- Special handling for non-boundary-ordered, self-intersecting, or degenerate quads
+- 射线遍历
+- 精确三角形相交测试
+- 最近邻或距离查询
+- 针对非边界顺序、自交或退化四边形的专门处理
 
-Files:
+文件说明：
 
-- `bvh3d.h`: public declarations
-- `bvh3d_impl.h`: template definitions included by `bvh3d.h`
-- `tests/bvh3d_test.cpp`: narrow compile-and-run coverage
+- `bvh3d.h`：公开声明
+- `bvh3d_impl.h`：由 `bvh3d.h` 引入的模板定义
+- `tests/bvh3d_test.cpp`：窄范围编译运行测试
 
-Build and run the test:
+测试命令：
 
 ```bash
 g++ -std=c++17 -Wall -Wextra -pedantic -I. bvh3d/tests/bvh3d_test.cpp -o /tmp/bvh3d_test
 /tmp/bvh3d_test
 ```
 
-Minimal example:
+最小示例：
 
 ```cpp
 #include <variant>

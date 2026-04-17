@@ -1,14 +1,13 @@
 # zcode
 
-`zcode` is a repository of standalone algorithms.
+`zcode` 是一个独立算法与学习模块集合仓库。
 
-- Every algorithm lives in its own subdirectory.
-- All implementation code should target C++17.
-- The current 3D BVH implementation lives in `bvh3d/`.
+- 每个模块放在各自独立的子目录中。
+- 大多数实现代码以 C++17 为目标标准，少量保留的学习示例会沿用原始语言实现。
+- 当前的三维 BVH 实现在 `bvh3d/` 目录中。
+- FAT12 学习模拟器位于 `fat12/` 目录中。
 
-Primary references:
+主要参考文档：
 
-- `ARCHITECTURE.md`
-- `docs/index.md`
-- `docs/NAVIGATION.md`
 - `bvh3d/README.md`
+- `fat12/README.md`

@@ -36,3 +36,24 @@
 g++ -std=c++17 -Wall -Wextra -pedantic -I. bvh3d/tests/bvh3d_test.cpp -o /tmp/bvh3d_test
 /tmp/bvh3d_test
 ```
+
+最小示例：
+
+```cpp
+#include <variant>
+#include <vector>
+
+#include "bvh3d/bvh3d.h"
+
+using Triangle = zcode::bvh3d::Triangle3<double>;
+using Quad = zcode::bvh3d::Quad3<double>;
+using Primitive = std::variant<Triangle, Quad>;
+
+std::vector<Primitive> primitives{
+    Triangle{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}},
+    Quad{{2.0, 2.0, 0.0}, {4.0, 2.0, 0.0}, {4.0, 4.0, 0.0}, {2.0, 4.0, 0.0}},
+};
+
+zcode::bvh3d::Bvh3<Primitive> bvh;
+bvh.build(primitives);
+```
