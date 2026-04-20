@@ -98,7 +98,19 @@ template <typename T>
 double length(const Vec3<T>& value);
 
 template <typename T>
+Vec3<double> to_double(const Vec3<T>& value);
+
+template <typename T>
+Vec3<double> cross(const Vec3<T>& left, const Vec3<T>& right);
+
+template <typename T>
+double squared_length(const Vec3<T>& value);
+
+template <typename T>
 Aabb3<T> compute_triangle_bounds(const Triangle3<T>& triangle);
+
+template <typename T>
+Aabb3<T> compute_quad_bounds(const Quad3<T>& quad);
 
 template <typename T>
 Vec3<double> compute_triangle_centroid(const Triangle3<T>& triangle);
@@ -108,6 +120,9 @@ double compute_corner_angle(const Vec3<T>& left, const Vec3<T>& vertex, const Ve
 
 template <typename T>
 double compute_minimum_triangle_angle(const Triangle3<T>& triangle);
+
+template <typename T>
+bool triangles_intersect(const Triangle3<T>& left, const Triangle3<T>& right);
 
 }  // namespace detail
 
@@ -192,9 +207,31 @@ public:
     /// Returns unique primitive indices whose triangulated bounds overlap the query box.
     std::vector<std::size_t> collect_overlapping_primitive_indices(const Aabb3<scalar_type>& query_bounds) const;
 
+    /// Returns all triangle hits whose geometry intersects the query triangle.
+    std::vector<const TriangleRecord*> collect_intersecting_triangles(
+        const Triangle3<scalar_type>& query_triangle) const;
+
+    /// Returns all triangle hits whose geometry intersects the query quadrilateral.
+    std::vector<const TriangleRecord*> collect_intersecting_triangles(const Quad3<scalar_type>& query_quad) const;
+
+    /// Returns unique primitive indices whose triangulated geometry intersects the query triangle.
+    std::vector<std::size_t> collect_intersecting_primitive_indices(
+        const Triangle3<scalar_type>& query_triangle) const;
+
+    /// Returns unique primitive indices whose triangulated geometry intersects the query quadrilateral.
+    std::vector<std::size_t> collect_intersecting_primitive_indices(const Quad3<scalar_type>& query_quad) const;
+
     /// Visits every triangle whose AABB overlaps the query box.
     template <typename Callback>
     void visit_overlapping_triangles(const Aabb3<scalar_type>& query_bounds, Callback&& callback) const;
+
+    /// Visits every triangle whose geometry intersects the query triangle.
+    template <typename Callback>
+    void visit_intersecting_triangles(const Triangle3<scalar_type>& query_triangle, Callback&& callback) const;
+
+    /// Visits every triangle whose geometry intersects the query quadrilateral.
+    template <typename Callback>
+    void visit_intersecting_triangles(const Quad3<scalar_type>& query_quad, Callback&& callback) const;
 
     /// Exposes the triangulated records for debugging and tests.
     const std::vector<TriangleRecord>& triangles() const;
@@ -230,6 +267,16 @@ private:
 
     /// Chooses the axis with the largest centroid extent.
     int choose_split_axis(const Aabb3<double>& centroid_bounds) const;
+
+    /// Visits every triangle whose AABB overlaps the query box.
+    template <typename Callback>
+    void visit_overlapping_triangle_records(const Aabb3<scalar_type>& query_bounds, Callback&& callback) const;
+
+    /// Visits every triangle intersecting any query triangle exactly once.
+    template <std::size_t QueryTriangleCount, typename Callback>
+    void visit_intersecting_triangle_records(
+        const std::array<Triangle3<scalar_type>, QueryTriangleCount>& query_triangles,
+        Callback&& callback) const;
 
     /// Builds one node recursively over a triangle subrange.
     std::size_t build_node(std::size_t begin, std::size_t end);

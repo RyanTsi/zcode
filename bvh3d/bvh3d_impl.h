@@ -100,11 +100,41 @@ double length(const Vec3<T>& value) {
 }
 
 template <typename T>
+Vec3<double> to_double(const Vec3<T>& value) {
+    return Vec3<double>(static_cast<double>(value.x), static_cast<double>(value.y), static_cast<double>(value.z));
+}
+
+template <typename T>
+Vec3<double> cross(const Vec3<T>& left, const Vec3<T>& right) {
+    return Vec3<double>(static_cast<double>(left.y) * static_cast<double>(right.z) -
+                            static_cast<double>(left.z) * static_cast<double>(right.y),
+                        static_cast<double>(left.z) * static_cast<double>(right.x) -
+                            static_cast<double>(left.x) * static_cast<double>(right.z),
+                        static_cast<double>(left.x) * static_cast<double>(right.y) -
+                            static_cast<double>(left.y) * static_cast<double>(right.x));
+}
+
+template <typename T>
+double squared_length(const Vec3<T>& value) {
+    return dot(value, value);
+}
+
+template <typename T>
 Aabb3<T> compute_triangle_bounds(const Triangle3<T>& triangle) {
     Aabb3<T> bounds = Aabb3<T>::empty();
     bounds.expand(triangle.a);
     bounds.expand(triangle.b);
     bounds.expand(triangle.c);
+    return bounds;
+}
+
+template <typename T>
+Aabb3<T> compute_quad_bounds(const Quad3<T>& quad) {
+    Aabb3<T> bounds = Aabb3<T>::empty();
+    bounds.expand(quad.a);
+    bounds.expand(quad.b);
+    bounds.expand(quad.c);
+    bounds.expand(quad.d);
     return bounds;
 }
 
@@ -141,6 +171,439 @@ double compute_minimum_triangle_angle(const Triangle3<T>& triangle) {
     const double angle_b = compute_corner_angle(triangle.a, triangle.b, triangle.c);
     const double angle_c = compute_corner_angle(triangle.a, triangle.c, triangle.b);
     return std::min(angle_a, std::min(angle_b, angle_c));
+}
+
+namespace {
+
+constexpr double kIntersectionEpsilonFactor = 1e-9;
+
+struct Vec2d {
+    double x = 0.0;
+    double y = 0.0;
+};
+
+enum class TriangleShape {
+    kTriangle,
+    kSegment,
+    kPoint,
+};
+
+template <typename T>
+double max_triangle_edge_length(const Triangle3<T>& triangle) {
+    return std::max({length(triangle.b - triangle.a), length(triangle.c - triangle.b), length(triangle.a - triangle.c)});
+}
+
+template <typename T>
+double compute_intersection_epsilon(const Triangle3<T>& left, const Triangle3<T>& right) {
+    return kIntersectionEpsilonFactor * std::max(1.0, std::max(max_triangle_edge_length(left), max_triangle_edge_length(right)));
+}
+
+template <typename T>
+Vec3<double> compute_triangle_normal(const Triangle3<T>& triangle) {
+    return cross(triangle.b - triangle.a, triangle.c - triangle.a);
+}
+
+template <typename T>
+Vec3<double> compute_unit_triangle_normal(const Triangle3<T>& triangle) {
+    const Vec3<double> normal = compute_triangle_normal(triangle);
+    const double normal_length = length(normal);
+    if (normal_length == 0.0) {
+        return Vec3<double>(0.0, 0.0, 0.0);
+    }
+    return normal / normal_length;
+}
+
+inline int choose_projection_axis_from_normal(const Vec3<double>& normal) {
+    const double x_abs = std::abs(normal.x);
+    const double y_abs = std::abs(normal.y);
+    const double z_abs = std::abs(normal.z);
+    if (x_abs >= y_abs && x_abs >= z_abs) {
+        return 0;
+    }
+    if (y_abs >= z_abs) {
+        return 1;
+    }
+    return 2;
+}
+
+template <typename T>
+Vec2d project_point_to_2d(const Vec3<T>& point, int axis) {
+    if (axis == 0) {
+        return Vec2d{static_cast<double>(point.y), static_cast<double>(point.z)};
+    }
+    if (axis == 1) {
+        return Vec2d{static_cast<double>(point.x), static_cast<double>(point.z)};
+    }
+    return Vec2d{static_cast<double>(point.x), static_cast<double>(point.y)};
+}
+
+inline double orient2d(const Vec2d& a, const Vec2d& b, const Vec2d& c) {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+inline bool point_in_2d_bounds(const Vec2d& point, const Vec2d& a, const Vec2d& b, double epsilon) {
+    return point.x >= std::min(a.x, b.x) - epsilon && point.x <= std::max(a.x, b.x) + epsilon &&
+           point.y >= std::min(a.y, b.y) - epsilon && point.y <= std::max(a.y, b.y) + epsilon;
+}
+
+inline bool point_on_segment_2d(const Vec2d& point, const Vec2d& a, const Vec2d& b, double epsilon) {
+    return std::abs(orient2d(a, b, point)) <= epsilon && point_in_2d_bounds(point, a, b, epsilon);
+}
+
+inline bool segments_intersect_2d(const Vec2d& a0,
+                                  const Vec2d& a1,
+                                  const Vec2d& b0,
+                                  const Vec2d& b1,
+                                  double epsilon) {
+    const double o0 = orient2d(a0, a1, b0);
+    const double o1 = orient2d(a0, a1, b1);
+    const double o2 = orient2d(b0, b1, a0);
+    const double o3 = orient2d(b0, b1, a1);
+
+    const bool proper_intersection =
+        ((o0 > epsilon && o1 < -epsilon) || (o0 < -epsilon && o1 > epsilon)) &&
+        ((o2 > epsilon && o3 < -epsilon) || (o2 < -epsilon && o3 > epsilon));
+    if (proper_intersection) {
+        return true;
+    }
+
+    return point_on_segment_2d(b0, a0, a1, epsilon) || point_on_segment_2d(b1, a0, a1, epsilon) ||
+           point_on_segment_2d(a0, b0, b1, epsilon) || point_on_segment_2d(a1, b0, b1, epsilon);
+}
+
+inline bool point_in_triangle_2d(const Vec2d& point,
+                                 const Vec2d& a,
+                                 const Vec2d& b,
+                                 const Vec2d& c,
+                                 double epsilon) {
+    const double o0 = orient2d(a, b, point);
+    const double o1 = orient2d(b, c, point);
+    const double o2 = orient2d(c, a, point);
+    const bool non_negative = o0 >= -epsilon && o1 >= -epsilon && o2 >= -epsilon;
+    const bool non_positive = o0 <= epsilon && o1 <= epsilon && o2 <= epsilon;
+    return non_negative || non_positive;
+}
+
+template <typename T>
+TriangleShape classify_triangle_shape(const Triangle3<T>& triangle,
+                                      double epsilon,
+                                      std::array<Vec3<double>, 2>& segment,
+                                      Vec3<double>& point) {
+    const Vec3<double> a = to_double(triangle.a);
+    const Vec3<double> b = to_double(triangle.b);
+    const Vec3<double> c = to_double(triangle.c);
+
+    const double ab_length_squared = squared_length(b - a);
+    const double bc_length_squared = squared_length(c - b);
+    const double ca_length_squared = squared_length(a - c);
+    const double max_edge_length_squared = std::max({ab_length_squared, bc_length_squared, ca_length_squared});
+    if (max_edge_length_squared <= epsilon * epsilon) {
+        point = a;
+        segment = {a, a};
+        return TriangleShape::kPoint;
+    }
+
+    if (ab_length_squared >= bc_length_squared && ab_length_squared >= ca_length_squared) {
+        segment = {a, b};
+        point = c;
+    } else if (bc_length_squared >= ca_length_squared) {
+        segment = {b, c};
+        point = a;
+    } else {
+        segment = {c, a};
+        point = b;
+    }
+
+    const Vec3<double> normal = compute_triangle_normal(triangle);
+    if (squared_length(normal) <= epsilon * epsilon * max_edge_length_squared) {
+        return TriangleShape::kSegment;
+    }
+
+    point = a;
+    return TriangleShape::kTriangle;
+}
+
+template <typename T>
+double signed_distance_to_plane(const Vec3<T>& point, const Vec3<T>& plane_point, const Vec3<double>& unit_normal) {
+    return dot(to_double(point) - to_double(plane_point), unit_normal);
+}
+
+inline bool point_on_segment_3d(const Vec3<double>& point,
+                                const Vec3<double>& start,
+                                const Vec3<double>& end,
+                                double epsilon) {
+    const Vec3<double> segment = end - start;
+    const double segment_length_squared = squared_length(segment);
+    if (segment_length_squared <= epsilon * epsilon) {
+        return squared_length(point - start) <= epsilon * epsilon;
+    }
+
+    const Vec3<double> point_offset = point - start;
+    if (squared_length(cross(point_offset, segment)) > epsilon * epsilon * segment_length_squared) {
+        return false;
+    }
+
+    const double parameter = dot(point_offset, segment) / segment_length_squared;
+    if (parameter < -epsilon || parameter > 1.0 + epsilon) {
+        return false;
+    }
+
+    const Vec3<double> closest_point = start + segment * std::max(0.0, std::min(1.0, parameter));
+    return squared_length(point - closest_point) <= epsilon * epsilon;
+}
+
+inline double segment_segment_distance_squared(const Vec3<double>& left_start,
+                                               const Vec3<double>& left_end,
+                                               const Vec3<double>& right_start,
+                                               const Vec3<double>& right_end) {
+    const Vec3<double> left_direction = left_end - left_start;
+    const Vec3<double> right_direction = right_end - right_start;
+    const Vec3<double> start_offset = left_start - right_start;
+
+    const double left_length_squared = squared_length(left_direction);
+    const double right_length_squared = squared_length(right_direction);
+    const double cross_term = dot(left_direction, right_direction);
+    const double left_offset = dot(left_direction, start_offset);
+    const double right_offset = dot(right_direction, start_offset);
+
+    double left_parameter = 0.0;
+    double right_parameter = 0.0;
+
+    if (left_length_squared <= 0.0 && right_length_squared <= 0.0) {
+        return squared_length(left_start - right_start);
+    }
+
+    if (left_length_squared <= 0.0) {
+        right_parameter = std::max(0.0, std::min(1.0, right_offset / right_length_squared));
+    } else if (right_length_squared <= 0.0) {
+        left_parameter = std::max(0.0, std::min(1.0, -left_offset / left_length_squared));
+    } else {
+        const double denominator = left_length_squared * right_length_squared - cross_term * cross_term;
+        if (denominator != 0.0) {
+            left_parameter = std::max(
+                0.0,
+                std::min(1.0, (cross_term * right_offset - left_offset * right_length_squared) / denominator));
+        }
+
+        right_parameter = (cross_term * left_parameter + right_offset) / right_length_squared;
+        if (right_parameter < 0.0) {
+            right_parameter = 0.0;
+            left_parameter = std::max(0.0, std::min(1.0, -left_offset / left_length_squared));
+        } else if (right_parameter > 1.0) {
+            right_parameter = 1.0;
+            left_parameter = std::max(0.0, std::min(1.0, (cross_term - left_offset) / left_length_squared));
+        }
+    }
+
+    const Vec3<double> left_closest = left_start + left_direction * left_parameter;
+    const Vec3<double> right_closest = right_start + right_direction * right_parameter;
+    return squared_length(left_closest - right_closest);
+}
+
+template <typename T>
+bool point_in_triangle_on_plane(const Vec3<double>& point,
+                                const Triangle3<T>& triangle,
+                                const Vec3<double>& plane_normal,
+                                double epsilon) {
+    const int projection_axis = choose_projection_axis_from_normal(plane_normal);
+    const Vec2d projected_point = project_point_to_2d(point, projection_axis);
+    const Vec2d projected_a = project_point_to_2d(triangle.a, projection_axis);
+    const Vec2d projected_b = project_point_to_2d(triangle.b, projection_axis);
+    const Vec2d projected_c = project_point_to_2d(triangle.c, projection_axis);
+    return point_in_triangle_2d(projected_point, projected_a, projected_b, projected_c, epsilon);
+}
+
+template <typename T>
+bool coplanar_segment_triangle_intersect(const Vec3<double>& segment_start,
+                                         const Vec3<double>& segment_end,
+                                         const Triangle3<T>& triangle,
+                                         const Vec3<double>& plane_normal,
+                                         double epsilon) {
+    const int projection_axis = choose_projection_axis_from_normal(plane_normal);
+    const Vec2d projected_segment_start = project_point_to_2d(segment_start, projection_axis);
+    const Vec2d projected_segment_end = project_point_to_2d(segment_end, projection_axis);
+    const Vec2d projected_a = project_point_to_2d(triangle.a, projection_axis);
+    const Vec2d projected_b = project_point_to_2d(triangle.b, projection_axis);
+    const Vec2d projected_c = project_point_to_2d(triangle.c, projection_axis);
+
+    if (point_in_triangle_2d(projected_segment_start, projected_a, projected_b, projected_c, epsilon) ||
+        point_in_triangle_2d(projected_segment_end, projected_a, projected_b, projected_c, epsilon)) {
+        return true;
+    }
+
+    return segments_intersect_2d(projected_segment_start, projected_segment_end, projected_a, projected_b, epsilon) ||
+           segments_intersect_2d(projected_segment_start, projected_segment_end, projected_b, projected_c, epsilon) ||
+           segments_intersect_2d(projected_segment_start, projected_segment_end, projected_c, projected_a, epsilon);
+}
+
+template <typename T>
+bool coplanar_triangles_intersect(const Triangle3<T>& left,
+                                  const Triangle3<T>& right,
+                                  const Vec3<double>& plane_normal,
+                                  double epsilon) {
+    const int projection_axis = choose_projection_axis_from_normal(plane_normal);
+    const std::array<Vec2d, 3> left_vertices{
+        project_point_to_2d(left.a, projection_axis),
+        project_point_to_2d(left.b, projection_axis),
+        project_point_to_2d(left.c, projection_axis)};
+    const std::array<Vec2d, 3> right_vertices{
+        project_point_to_2d(right.a, projection_axis),
+        project_point_to_2d(right.b, projection_axis),
+        project_point_to_2d(right.c, projection_axis)};
+
+    for (std::size_t left_index = 0; left_index < 3U; ++left_index) {
+        const std::size_t left_next = (left_index + 1U) % 3U;
+        for (std::size_t right_index = 0; right_index < 3U; ++right_index) {
+            const std::size_t right_next = (right_index + 1U) % 3U;
+            if (segments_intersect_2d(left_vertices[left_index],
+                                      left_vertices[left_next],
+                                      right_vertices[right_index],
+                                      right_vertices[right_next],
+                                      epsilon)) {
+                return true;
+            }
+        }
+    }
+
+    return point_in_triangle_2d(left_vertices[0], right_vertices[0], right_vertices[1], right_vertices[2], epsilon) ||
+           point_in_triangle_2d(right_vertices[0], left_vertices[0], left_vertices[1], left_vertices[2], epsilon);
+}
+
+template <typename T>
+bool point_intersects_triangle(const Vec3<double>& point, const Triangle3<T>& triangle, double epsilon);
+
+template <typename T>
+bool segment_intersects_triangle(const Vec3<double>& segment_start,
+                                 const Vec3<double>& segment_end,
+                                 const Triangle3<T>& triangle,
+                                 double epsilon);
+
+template <typename T>
+bool point_intersects_triangle(const Vec3<double>& point, const Triangle3<T>& triangle, double epsilon) {
+    std::array<Vec3<double>, 2> segment{};
+    Vec3<double> reference_point;
+    const TriangleShape shape = classify_triangle_shape(triangle, epsilon, segment, reference_point);
+    if (shape == TriangleShape::kPoint) {
+        return squared_length(point - segment[0]) <= epsilon * epsilon;
+    }
+    if (shape == TriangleShape::kSegment) {
+        return point_on_segment_3d(point, segment[0], segment[1], epsilon);
+    }
+
+    const Vec3<double> plane_normal = compute_unit_triangle_normal(triangle);
+    if (std::abs(dot(point - to_double(triangle.a), plane_normal)) > epsilon) {
+        return false;
+    }
+    return point_in_triangle_on_plane(point, triangle, plane_normal, epsilon);
+}
+
+template <typename T>
+bool segment_intersects_triangle(const Vec3<double>& segment_start,
+                                 const Vec3<double>& segment_end,
+                                 const Triangle3<T>& triangle,
+                                 double epsilon) {
+    std::array<Vec3<double>, 2> reduced_segment{};
+    Vec3<double> reference_point;
+    const TriangleShape shape = classify_triangle_shape(triangle, epsilon, reduced_segment, reference_point);
+    if (shape == TriangleShape::kPoint) {
+        return point_on_segment_3d(reduced_segment[0], segment_start, segment_end, epsilon);
+    }
+    if (shape == TriangleShape::kSegment) {
+        return segment_segment_distance_squared(segment_start, segment_end, reduced_segment[0], reduced_segment[1]) <=
+               epsilon * epsilon;
+    }
+
+    const Vec3<double> plane_normal = compute_unit_triangle_normal(triangle);
+    const double start_distance = dot(segment_start - to_double(triangle.a), plane_normal);
+    const double end_distance = dot(segment_end - to_double(triangle.a), plane_normal);
+
+    if ((start_distance > epsilon && end_distance > epsilon) || (start_distance < -epsilon && end_distance < -epsilon)) {
+        return false;
+    }
+
+    if (std::abs(start_distance) <= epsilon && std::abs(end_distance) <= epsilon) {
+        return coplanar_segment_triangle_intersect(segment_start, segment_end, triangle, plane_normal, epsilon);
+    }
+
+    if (std::abs(start_distance) <= epsilon && point_in_triangle_on_plane(segment_start, triangle, plane_normal, epsilon)) {
+        return true;
+    }
+    if (std::abs(end_distance) <= epsilon && point_in_triangle_on_plane(segment_end, triangle, plane_normal, epsilon)) {
+        return true;
+    }
+
+    const double denominator = start_distance - end_distance;
+    if (std::abs(denominator) <= epsilon) {
+        return false;
+    }
+
+    const double parameter = start_distance / denominator;
+    if (parameter < -epsilon || parameter > 1.0 + epsilon) {
+        return false;
+    }
+
+    const double clamped_parameter = std::max(0.0, std::min(1.0, parameter));
+    const Vec3<double> intersection_point =
+        segment_start + (segment_end - segment_start) * clamped_parameter;
+    return point_in_triangle_on_plane(intersection_point, triangle, plane_normal, epsilon);
+}
+
+}  // namespace
+
+template <typename T>
+bool triangles_intersect(const Triangle3<T>& left, const Triangle3<T>& right) {
+    if (!compute_triangle_bounds(left).overlaps(compute_triangle_bounds(right))) {
+        return false;
+    }
+
+    const double epsilon = compute_intersection_epsilon(left, right);
+
+    std::array<Vec3<double>, 2> left_segment{};
+    std::array<Vec3<double>, 2> right_segment{};
+    Vec3<double> left_point;
+    Vec3<double> right_point;
+    const TriangleShape left_shape = classify_triangle_shape(left, epsilon, left_segment, left_point);
+    const TriangleShape right_shape = classify_triangle_shape(right, epsilon, right_segment, right_point);
+
+    if (left_shape == TriangleShape::kPoint && right_shape == TriangleShape::kPoint) {
+        return squared_length(left_segment[0] - right_segment[0]) <= epsilon * epsilon;
+    }
+    if (left_shape == TriangleShape::kPoint && right_shape == TriangleShape::kSegment) {
+        return point_on_segment_3d(left_segment[0], right_segment[0], right_segment[1], epsilon);
+    }
+    if (left_shape == TriangleShape::kSegment && right_shape == TriangleShape::kPoint) {
+        return point_on_segment_3d(right_segment[0], left_segment[0], left_segment[1], epsilon);
+    }
+    if (left_shape == TriangleShape::kPoint) {
+        return point_intersects_triangle(left_segment[0], right, epsilon);
+    }
+    if (right_shape == TriangleShape::kPoint) {
+        return point_intersects_triangle(right_segment[0], left, epsilon);
+    }
+    if (left_shape == TriangleShape::kSegment && right_shape == TriangleShape::kSegment) {
+        return segment_segment_distance_squared(left_segment[0], left_segment[1], right_segment[0], right_segment[1]) <=
+               epsilon * epsilon;
+    }
+    if (left_shape == TriangleShape::kSegment) {
+        return segment_intersects_triangle(left_segment[0], left_segment[1], right, epsilon);
+    }
+    if (right_shape == TriangleShape::kSegment) {
+        return segment_intersects_triangle(right_segment[0], right_segment[1], left, epsilon);
+    }
+
+    const std::array<Vec3<double>, 3> left_vertices{to_double(left.a), to_double(left.b), to_double(left.c)};
+    const std::array<Vec3<double>, 3> right_vertices{to_double(right.a), to_double(right.b), to_double(right.c)};
+
+    for (std::size_t index = 0; index < 3U; ++index) {
+        const std::size_t next = (index + 1U) % 3U;
+        if (segment_intersects_triangle(left_vertices[index], left_vertices[next], right, epsilon) ||
+            segment_intersects_triangle(right_vertices[index], right_vertices[next], left, epsilon)) {
+            return true;
+        }
+    }
+
+    return point_intersects_triangle(left_vertices[0], right, epsilon) ||
+           point_intersects_triangle(right_vertices[0], left, epsilon);
 }
 
 }  // namespace detail
@@ -259,9 +722,74 @@ std::vector<std::size_t> Bvh3<Primitive, Adapter>::collect_overlapping_primitive
 }
 
 template <typename Primitive, typename Adapter>
+std::vector<const typename Bvh3<Primitive, Adapter>::TriangleRecord*>
+Bvh3<Primitive, Adapter>::collect_intersecting_triangles(const Triangle3<scalar_type>& query_triangle) const {
+    std::vector<const TriangleRecord*> hits;
+    visit_intersecting_triangles(query_triangle, [&](const TriangleRecord& record) { hits.push_back(&record); });
+    return hits;
+}
+
+template <typename Primitive, typename Adapter>
+std::vector<const typename Bvh3<Primitive, Adapter>::TriangleRecord*>
+Bvh3<Primitive, Adapter>::collect_intersecting_triangles(const Quad3<scalar_type>& query_quad) const {
+    std::vector<const TriangleRecord*> hits;
+    visit_intersecting_triangles(query_quad, [&](const TriangleRecord& record) { hits.push_back(&record); });
+    return hits;
+}
+
+template <typename Primitive, typename Adapter>
+std::vector<std::size_t> Bvh3<Primitive, Adapter>::collect_intersecting_primitive_indices(
+    const Triangle3<scalar_type>& query_triangle) const {
+    std::vector<std::size_t> primitive_indices;
+    visit_intersecting_triangles(query_triangle, [&](const TriangleRecord& record) {
+        primitive_indices.push_back(record.primitive_index);
+    });
+    std::sort(primitive_indices.begin(), primitive_indices.end());
+    primitive_indices.erase(std::unique(primitive_indices.begin(), primitive_indices.end()), primitive_indices.end());
+    return primitive_indices;
+}
+
+template <typename Primitive, typename Adapter>
+std::vector<std::size_t> Bvh3<Primitive, Adapter>::collect_intersecting_primitive_indices(
+    const Quad3<scalar_type>& query_quad) const {
+    std::vector<std::size_t> primitive_indices;
+    visit_intersecting_triangles(query_quad, [&](const TriangleRecord& record) {
+        primitive_indices.push_back(record.primitive_index);
+    });
+    std::sort(primitive_indices.begin(), primitive_indices.end());
+    primitive_indices.erase(std::unique(primitive_indices.begin(), primitive_indices.end()), primitive_indices.end());
+    return primitive_indices;
+}
+
+template <typename Primitive, typename Adapter>
 template <typename Callback>
 void Bvh3<Primitive, Adapter>::visit_overlapping_triangles(const Aabb3<scalar_type>& query_bounds,
                                                            Callback&& callback) const {
+    visit_overlapping_triangle_records(query_bounds, std::forward<Callback>(callback));
+}
+
+template <typename Primitive, typename Adapter>
+template <typename Callback>
+void Bvh3<Primitive, Adapter>::visit_intersecting_triangles(const Triangle3<scalar_type>& query_triangle,
+                                                            Callback&& callback) const {
+    visit_intersecting_triangle_records(std::array<Triangle3<scalar_type>, 1U>{query_triangle},
+                                        std::forward<Callback>(callback));
+}
+
+template <typename Primitive, typename Adapter>
+template <typename Callback>
+void Bvh3<Primitive, Adapter>::visit_intersecting_triangles(const Quad3<scalar_type>& query_quad,
+                                                            Callback&& callback) const {
+    const QuadTriangulation<scalar_type> triangulation = split_quad_maximizing_minimum_angle(query_quad);
+    visit_intersecting_triangle_records(
+        std::array<Triangle3<scalar_type>, 2U>{triangulation.first_triangle, triangulation.second_triangle},
+        std::forward<Callback>(callback));
+}
+
+template <typename Primitive, typename Adapter>
+template <typename Callback>
+void Bvh3<Primitive, Adapter>::visit_overlapping_triangle_records(const Aabb3<scalar_type>& query_bounds,
+                                                                  Callback&& callback) const {
     if (root_node_index_ == invalid_node_index) {
         return;
     }
@@ -292,6 +820,30 @@ void Bvh3<Primitive, Adapter>::visit_overlapping_triangles(const Aabb3<scalar_ty
         stack.push_back(node.left_child);
         stack.push_back(node.right_child);
     }
+}
+
+template <typename Primitive, typename Adapter>
+template <std::size_t QueryTriangleCount, typename Callback>
+void Bvh3<Primitive, Adapter>::visit_intersecting_triangle_records(
+    const std::array<Triangle3<scalar_type>, QueryTriangleCount>& query_triangles,
+    Callback&& callback) const {
+    if (root_node_index_ == invalid_node_index) {
+        return;
+    }
+
+    Aabb3<scalar_type> query_bounds = Aabb3<scalar_type>::empty();
+    for (const Triangle3<scalar_type>& query_triangle : query_triangles) {
+        query_bounds.expand(detail::compute_triangle_bounds(query_triangle));
+    }
+
+    visit_overlapping_triangle_records(query_bounds, [&](const TriangleRecord& record) {
+        for (const Triangle3<scalar_type>& query_triangle : query_triangles) {
+            if (detail::triangles_intersect(record.triangle, query_triangle)) {
+                callback(record);
+                break;
+            }
+        }
+    });
 }
 
 template <typename Primitive, typename Adapter>

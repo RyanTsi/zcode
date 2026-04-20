@@ -15,12 +15,19 @@
 当前查询能力：
 
 - 基于三角化记录的 AABB 重叠遍历
+- 基于 `Triangle3<T>` 的精确三角形相交查询
+- 基于 `Quad3<T>` 的精确四边形相交查询
 - 唯一 primitive 命中收集
+
+查询分层：
+
+- `collect_overlapping_*` / `visit_overlapping_*` 仍然是 broad phase，只做包围盒重叠判断。
+- `collect_intersecting_*` / `visit_intersecting_*` 会先用查询图元的 AABB 做 BVH 剪枝，再对候选三角形执行精确几何相交测试。
+- 四边形查询会沿用库内的对角线选择策略，先拆成两个三角形，再合并命中结果。
 
 本轮暂不包含：
 
 - 射线遍历
-- 精确三角形相交测试
 - 最近邻或距离查询
 - 针对非边界顺序、自交或退化四边形的专门处理
 
@@ -56,4 +63,7 @@ std::vector<Primitive> primitives{
 
 zcode::bvh3d::Bvh3<Primitive> bvh;
 bvh.build(primitives);
+
+Quad query{{1.5, 1.5, 0.0}, {3.5, 1.5, 0.0}, {3.5, 3.5, 0.0}, {1.5, 3.5, 0.0}};
+std::vector<std::size_t> hits = bvh.collect_intersecting_primitive_indices(query);
 ```

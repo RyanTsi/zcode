@@ -83,6 +83,57 @@ void test_triangle_bvh_miss_and_invalid_query() {
     assert(invalid_hits.empty());
 }
 
+/// Verifies that exact triangle tests reject AABB false positives.
+void test_triangle_bvh_precise_query_filters_aabb_false_positive() {
+    std::vector<Triangle> primitives{
+        Triangle{Vec3(0.0, 0.0, 0.0), Vec3(2.0, 0.0, 0.0), Vec3(0.0, 2.0, 0.0)}
+    };
+
+    const Triangle query_triangle{
+        Vec3(1.6, 1.6, 0.0),
+        Vec3(2.5, 1.6, 0.0),
+        Vec3(1.6, 2.5, 0.0)
+    };
+
+    zcode::bvh3d::Bvh3<Triangle> bvh(1);
+    bvh.build(primitives);
+
+    const auto overlap_hits = bvh.collect_overlapping_triangles(
+        zcode::bvh3d::detail::compute_triangle_bounds(query_triangle));
+    const auto precise_hits = bvh.collect_intersecting_triangles(query_triangle);
+    const auto primitive_hits = bvh.collect_intersecting_primitive_indices(query_triangle);
+
+    assert(overlap_hits.size() == 1U);
+    assert(precise_hits.empty());
+    assert(primitive_hits.empty());
+}
+
+/// Verifies that quadrilateral queries are triangulated and matched exactly.
+void test_quad_query_reports_precise_intersections() {
+    std::vector<Triangle> primitives{
+        Triangle{Vec3(0.0, 0.0, 0.0), Vec3(1.5, 0.0, 0.0), Vec3(0.0, 1.5, 0.0)},
+        Triangle{Vec3(3.0, 3.0, 0.0), Vec3(4.0, 3.0, 0.0), Vec3(3.0, 4.0, 0.0)}
+    };
+
+    const Quad query_quad{
+        Vec3(0.25, 0.25, 0.0),
+        Vec3(1.0, 0.25, 0.0),
+        Vec3(1.0, 1.0, 0.0),
+        Vec3(0.25, 1.0, 0.0)
+    };
+
+    zcode::bvh3d::Bvh3<Triangle> bvh(1);
+    bvh.build(primitives);
+
+    const auto precise_hits = bvh.collect_intersecting_triangles(query_quad);
+    const auto primitive_hits = bvh.collect_intersecting_primitive_indices(query_quad);
+
+    assert(precise_hits.size() == 1U);
+    assert(precise_hits.front()->primitive_index == 0U);
+    assert(primitive_hits.size() == 1U);
+    assert(primitive_hits.front() == 0U);
+}
+
 /// Verifies that mixed triangle and quad input can share one BVH instance.
 void test_variant_input_supports_triangle_and_quad() {
     using Primitive = std::variant<Triangle, Quad>;
@@ -116,6 +167,8 @@ int main() {
     test_empty_bvh_query_returns_no_hits();
     test_triangle_bvh_overlap_query();
     test_triangle_bvh_miss_and_invalid_query();
+    test_triangle_bvh_precise_query_filters_aabb_false_positive();
+    test_quad_query_reports_precise_intersections();
     test_variant_input_supports_triangle_and_quad();
     return 0;
 }
