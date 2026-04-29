@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <variant>
 #include <vector>
@@ -12,6 +13,16 @@ using Triangle = zcode::bvh3d::Triangle3<Scalar>;
 using Quad = zcode::bvh3d::Quad3<Scalar>;
 using Aabb = zcode::bvh3d::Aabb3<Scalar>;
 using Vec3 = zcode::bvh3d::Vec3<Scalar>;
+
+bool nearly_equal(double left, double right, double tolerance = 1e-12) {
+    return std::abs(left - right) <= tolerance;
+}
+
+bool nearly_equal(const Vec3& left, const Vec3& right, double tolerance = 1e-12) {
+    return nearly_equal(left.x, right.x, tolerance) &&
+           nearly_equal(left.y, right.y, tolerance) &&
+           nearly_equal(left.z, right.z, tolerance);
+}
 
 /// Verifies that the quad split keeps the smallest angle as large as possible.
 void test_quad_triangulation_prefers_best_minimum_angle() {
@@ -45,6 +56,7 @@ void test_empty_bvh_query_returns_no_hits() {
     assert(bvh.primitive_count() == 0U);
     assert(bvh.triangle_count() == 0U);
     assert(hits.empty());
+    assert(!bvh.find_nearest_face(Vec3(0.0, 0.0, 0.0)).has_value());
 }
 
 /// Verifies that triangle-only input can be queried through overlapping AABBs.
@@ -159,6 +171,64 @@ void test_variant_input_supports_triangle_and_quad() {
     }
 }
 
+/// Verifies that nearest-face queries report the projected point and displacement.
+void test_nearest_face_projects_to_triangle_interior() {
+    std::vector<Triangle> primitives{
+        Triangle{Vec3(0.0, 0.0, 0.0), Vec3(2.0, 0.0, 0.0), Vec3(0.0, 2.0, 0.0)},
+        Triangle{Vec3(5.0, 5.0, 5.0), Vec3(6.0, 5.0, 5.0), Vec3(5.0, 6.0, 5.0)}
+    };
+
+    zcode::bvh3d::Bvh3<Triangle> bvh(1);
+    bvh.build(primitives);
+
+    const auto nearest = bvh.find_nearest_face(Vec3(0.25, 0.25, 3.0));
+
+    assert(nearest.has_value());
+    assert(nearest->triangle_record != nullptr);
+    assert(nearest->triangle_record->primitive_index == 0U);
+    assert(nearly_equal(nearest->closest_point, Vec3(0.25, 0.25, 0.0)));
+    assert(nearly_equal(nearest->displacement, Vec3(0.0, 0.0, -3.0)));
+    assert(nearly_equal(nearest->distance_squared, 9.0));
+    assert(nearly_equal(nearest->distance, 3.0));
+}
+
+/// Verifies that nearest-face queries clamp to triangle edges when the projection is outside.
+void test_nearest_face_clamps_to_triangle_boundary() {
+    std::vector<Triangle> primitives{
+        Triangle{Vec3(0.0, 0.0, 0.0), Vec3(2.0, 0.0, 0.0), Vec3(0.0, 2.0, 0.0)}
+    };
+
+    zcode::bvh3d::Bvh3<Triangle> bvh(1);
+    bvh.build(primitives);
+
+    const auto nearest = bvh.find_nearest_face(Vec3(2.0, 2.0, 1.0));
+
+    assert(nearest.has_value());
+    assert(nearly_equal(nearest->closest_point, Vec3(1.0, 1.0, 0.0)));
+    assert(nearly_equal(nearest->displacement, Vec3(-1.0, -1.0, -1.0)));
+    assert(nearly_equal(nearest->distance_squared, 3.0));
+}
+
+/// Verifies that quad primitives are still identified by their original primitive index.
+void test_nearest_face_reports_quad_source_primitive() {
+    using Primitive = std::variant<Triangle, Quad>;
+    std::vector<Primitive> primitives;
+    primitives.emplace_back(Triangle{Vec3(10.0, 10.0, 0.0), Vec3(11.0, 10.0, 0.0), Vec3(10.0, 11.0, 0.0)});
+    primitives.emplace_back(Quad{Vec3(2.0, 2.0, 0.0), Vec3(4.0, 2.0, 0.0), Vec3(4.0, 4.0, 0.0), Vec3(2.0, 4.0, 0.0)});
+
+    zcode::bvh3d::Bvh3<Primitive> bvh(1);
+    bvh.build(primitives);
+
+    const auto nearest = bvh.find_nearest_face(Vec3(3.0, 3.0, 2.0));
+
+    assert(nearest.has_value());
+    assert(nearest->triangle_record != nullptr);
+    assert(nearest->triangle_record->primitive_index == 1U);
+    assert(nearest->triangle_record->local_triangle_index < 2U);
+    assert(nearly_equal(nearest->closest_point, Vec3(3.0, 3.0, 0.0)));
+    assert(nearly_equal(nearest->displacement, Vec3(0.0, 0.0, -2.0)));
+}
+
 }  // namespace
 
 int main() {
@@ -170,5 +240,8 @@ int main() {
     test_triangle_bvh_precise_query_filters_aabb_false_positive();
     test_quad_query_reports_precise_intersections();
     test_variant_input_supports_triangle_and_quad();
+    test_nearest_face_projects_to_triangle_interior();
+    test_nearest_face_clamps_to_triangle_boundary();
+    test_nearest_face_reports_quad_source_primitive();
     return 0;
 }

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -113,6 +114,12 @@ template <typename T>
 Aabb3<T> compute_quad_bounds(const Quad3<T>& quad);
 
 template <typename T>
+double point_aabb_distance_squared(const Vec3<double>& point, const Aabb3<T>& bounds);
+
+template <typename T>
+Vec3<double> compute_closest_point_on_triangle(const Vec3<double>& point, const Triangle3<T>& triangle);
+
+template <typename T>
 Vec3<double> compute_triangle_centroid(const Triangle3<T>& triangle);
 
 template <typename T>
@@ -182,6 +189,15 @@ public:
         std::size_t local_triangle_index = 0;
     };
 
+    /// Stores the nearest face query result.
+    struct NearestFaceResult {
+        const TriangleRecord* triangle_record = nullptr;
+        Vec3<double> closest_point;
+        Vec3<double> displacement;
+        double distance_squared = std::numeric_limits<double>::infinity();
+        double distance = std::numeric_limits<double>::infinity();
+    };
+
     /// Builds a BVH with a configurable leaf size.
     explicit Bvh3(std::size_t leaf_size = 4);
 
@@ -220,6 +236,11 @@ public:
 
     /// Returns unique primitive indices whose triangulated geometry intersects the query quadrilateral.
     std::vector<std::size_t> collect_intersecting_primitive_indices(const Quad3<scalar_type>& query_quad) const;
+
+    /// Returns the nearest triangulated face to the query point, or empty when the BVH has no faces.
+    ///
+    /// The displacement points from the query point to the closest point on the face.
+    std::optional<NearestFaceResult> find_nearest_face(const Vec3<scalar_type>& point) const;
 
     /// Visits every triangle whose AABB overlaps the query box.
     template <typename Callback>

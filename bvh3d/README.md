@@ -17,6 +17,7 @@
 - 基于三角化记录的 AABB 重叠遍历
 - 基于 `Triangle3<T>` 的精确三角形相交查询
 - 基于 `Quad3<T>` 的精确四边形相交查询
+- 点到最近三角化面的距离查询，返回最近点、位移向量和来源 primitive
 - 唯一 primitive 命中收集
 
 查询分层：
@@ -24,11 +25,11 @@
 - `collect_overlapping_*` / `visit_overlapping_*` 仍然是 broad phase，只做包围盒重叠判断。
 - `collect_intersecting_*` / `visit_intersecting_*` 会先用查询图元的 AABB 做 BVH 剪枝，再对候选三角形执行精确几何相交测试。
 - 四边形查询会沿用库内的对角线选择策略，先拆成两个三角形，再合并命中结果。
+- `find_nearest_face(point)` 会返回距离点最近的三角化面；位移向量方向为 `closest_point - point`。
 
 本轮暂不包含：
 
 - 射线遍历
-- 最近邻或距离查询
 - 针对非边界顺序、自交或退化四边形的专门处理
 
 文件说明：
@@ -66,4 +67,10 @@ bvh.build(primitives);
 
 Quad query{{1.5, 1.5, 0.0}, {3.5, 1.5, 0.0}, {3.5, 3.5, 0.0}, {1.5, 3.5, 0.0}};
 std::vector<std::size_t> hits = bvh.collect_intersecting_primitive_indices(query);
+
+auto nearest = bvh.find_nearest_face({3.0, 3.0, 1.0});
+if (nearest) {
+    Vec3 displacement = nearest->displacement;
+    std::size_t primitive_index = nearest->triangle_record->primitive_index;
+}
 ```

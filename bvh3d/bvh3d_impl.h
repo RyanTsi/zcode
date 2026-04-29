@@ -139,6 +139,158 @@ Aabb3<T> compute_quad_bounds(const Quad3<T>& quad) {
 }
 
 template <typename T>
+double point_aabb_distance_squared(const Vec3<double>& point, const Aabb3<T>& bounds) {
+    if (!bounds.is_valid()) {
+        return std::numeric_limits<double>::infinity();
+    }
+
+    double distance_squared = 0.0;
+    const double lower_x = static_cast<double>(bounds.lower.x);
+    const double lower_y = static_cast<double>(bounds.lower.y);
+    const double lower_z = static_cast<double>(bounds.lower.z);
+    const double upper_x = static_cast<double>(bounds.upper.x);
+    const double upper_y = static_cast<double>(bounds.upper.y);
+    const double upper_z = static_cast<double>(bounds.upper.z);
+
+    if (point.x < lower_x) {
+        const double delta = lower_x - point.x;
+        distance_squared += delta * delta;
+    } else if (point.x > upper_x) {
+        const double delta = point.x - upper_x;
+        distance_squared += delta * delta;
+    }
+
+    if (point.y < lower_y) {
+        const double delta = lower_y - point.y;
+        distance_squared += delta * delta;
+    } else if (point.y > upper_y) {
+        const double delta = point.y - upper_y;
+        distance_squared += delta * delta;
+    }
+
+    if (point.z < lower_z) {
+        const double delta = lower_z - point.z;
+        distance_squared += delta * delta;
+    } else if (point.z > upper_z) {
+        const double delta = point.z - upper_z;
+        distance_squared += delta * delta;
+    }
+
+    return distance_squared;
+}
+
+namespace {
+
+inline Vec3<double> closest_point_on_segment(const Vec3<double>& point,
+                                             const Vec3<double>& start,
+                                             const Vec3<double>& end) {
+    const Vec3<double> segment = end - start;
+    const double length_squared = squared_length(segment);
+    if (length_squared <= 0.0) {
+        return start;
+    }
+
+    const double parameter = std::max(0.0, std::min(1.0, dot(point - start, segment) / length_squared));
+    return start + segment * parameter;
+}
+
+inline Vec3<double> closest_point_on_degenerate_triangle(const Vec3<double>& point,
+                                                         const Vec3<double>& a,
+                                                         const Vec3<double>& b,
+                                                         const Vec3<double>& c) {
+    const std::array<Vec3<double>, 3> candidates{
+        closest_point_on_segment(point, a, b),
+        closest_point_on_segment(point, b, c),
+        closest_point_on_segment(point, c, a)};
+
+    Vec3<double> closest = candidates[0];
+    double best_distance_squared = squared_length(point - closest);
+    for (std::size_t index = 1; index < candidates.size(); ++index) {
+        const double candidate_distance_squared = squared_length(point - candidates[index]);
+        if (candidate_distance_squared < best_distance_squared) {
+            closest = candidates[index];
+            best_distance_squared = candidate_distance_squared;
+        }
+    }
+
+    return closest;
+}
+
+}  // namespace
+
+template <typename T>
+Vec3<double> compute_closest_point_on_triangle(const Vec3<double>& point, const Triangle3<T>& triangle) {
+    const Vec3<double> a = to_double(triangle.a);
+    const Vec3<double> b = to_double(triangle.b);
+    const Vec3<double> c = to_double(triangle.c);
+    const Vec3<double> ab = b - a;
+    const Vec3<double> ac = c - a;
+    const Vec3<double> bc = c - b;
+
+    const double ab_length_squared = squared_length(ab);
+    const double ac_length_squared = squared_length(ac);
+    const double bc_length_squared = squared_length(bc);
+    const double max_edge_length_squared = std::max({ab_length_squared, ac_length_squared, bc_length_squared});
+    if (max_edge_length_squared <= 0.0) {
+        return a;
+    }
+
+    const double normal_length_squared = squared_length(cross(ab, ac));
+    if (normal_length_squared <=
+        std::numeric_limits<double>::epsilon() * max_edge_length_squared * max_edge_length_squared) {
+        return closest_point_on_degenerate_triangle(point, a, b, c);
+    }
+
+    const Vec3<double> ap = point - a;
+    const double d1 = dot(ab, ap);
+    const double d2 = dot(ac, ap);
+    if (d1 <= 0.0 && d2 <= 0.0) {
+        return a;
+    }
+
+    const Vec3<double> bp = point - b;
+    const double d3 = dot(ab, bp);
+    const double d4 = dot(ac, bp);
+    if (d3 >= 0.0 && d4 <= d3) {
+        return b;
+    }
+
+    const double vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+        const double v = d1 / (d1 - d3);
+        return a + ab * v;
+    }
+
+    const Vec3<double> cp = point - c;
+    const double d5 = dot(ab, cp);
+    const double d6 = dot(ac, cp);
+    if (d6 >= 0.0 && d5 <= d6) {
+        return c;
+    }
+
+    const double vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+        const double w = d2 / (d2 - d6);
+        return a + ac * w;
+    }
+
+    const double va = d3 * d6 - d5 * d4;
+    if (va <= 0.0 && d4 >= d3 && d5 >= d6) {
+        const double w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return b + bc * w;
+    }
+
+    const double denominator = va + vb + vc;
+    if (std::abs(denominator) <= 0.0) {
+        return closest_point_on_degenerate_triangle(point, a, b, c);
+    }
+
+    const double v = vb / denominator;
+    const double w = vc / denominator;
+    return a + ab * v + ac * w;
+}
+
+template <typename T>
 Vec3<double> compute_triangle_centroid(const Triangle3<T>& triangle) {
     return Vec3<double>((static_cast<double>(triangle.a.x) + static_cast<double>(triangle.b.x) +
                          static_cast<double>(triangle.c.x)) /
@@ -759,6 +911,79 @@ std::vector<std::size_t> Bvh3<Primitive, Adapter>::collect_intersecting_primitiv
     std::sort(primitive_indices.begin(), primitive_indices.end());
     primitive_indices.erase(std::unique(primitive_indices.begin(), primitive_indices.end()), primitive_indices.end());
     return primitive_indices;
+}
+
+template <typename Primitive, typename Adapter>
+std::optional<typename Bvh3<Primitive, Adapter>::NearestFaceResult> Bvh3<Primitive, Adapter>::find_nearest_face(
+    const Vec3<scalar_type>& point) const {
+    if (root_node_index_ == invalid_node_index) {
+        return std::nullopt;
+    }
+
+    const Vec3<double> query_point = detail::to_double(point);
+    NearestFaceResult best;
+
+    std::vector<std::size_t> stack;
+    stack.push_back(root_node_index_);
+    while (!stack.empty()) {
+        const std::size_t node_index = stack.back();
+        stack.pop_back();
+
+        const Node& node = nodes_[node_index];
+        if (detail::point_aabb_distance_squared(query_point, node.bounds) > best.distance_squared) {
+            continue;
+        }
+
+        if (node.is_leaf()) {
+            for (std::size_t triangle_index = node.first_triangle;
+                 triangle_index < node.first_triangle + node.triangle_count;
+                 ++triangle_index) {
+                const TriangleRecord& record = triangles_[triangle_index];
+                if (detail::point_aabb_distance_squared(query_point, record.bounds) > best.distance_squared) {
+                    continue;
+                }
+
+                const Vec3<double> closest_point =
+                    detail::compute_closest_point_on_triangle(query_point, record.triangle);
+                const Vec3<double> displacement = closest_point - query_point;
+                const double distance_squared = detail::squared_length(displacement);
+                if (distance_squared < best.distance_squared) {
+                    best.triangle_record = &record;
+                    best.closest_point = closest_point;
+                    best.displacement = displacement;
+                    best.distance_squared = distance_squared;
+                    best.distance = std::sqrt(distance_squared);
+                }
+            }
+            continue;
+        }
+
+        const double left_distance_squared =
+            detail::point_aabb_distance_squared(query_point, nodes_[node.left_child].bounds);
+        const double right_distance_squared =
+            detail::point_aabb_distance_squared(query_point, nodes_[node.right_child].bounds);
+
+        if (left_distance_squared < right_distance_squared) {
+            if (right_distance_squared <= best.distance_squared) {
+                stack.push_back(node.right_child);
+            }
+            if (left_distance_squared <= best.distance_squared) {
+                stack.push_back(node.left_child);
+            }
+        } else {
+            if (left_distance_squared <= best.distance_squared) {
+                stack.push_back(node.left_child);
+            }
+            if (right_distance_squared <= best.distance_squared) {
+                stack.push_back(node.right_child);
+            }
+        }
+    }
+
+    if (best.triangle_record == nullptr) {
+        return std::nullopt;
+    }
+    return best;
 }
 
 template <typename Primitive, typename Adapter>
